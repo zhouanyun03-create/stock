@@ -1,0 +1,32 @@
+import pandas as pd
+import requests
+
+def get_taiwan_stock_list():
+    # 1. 設定證交所公開清單的網址 (上市股票)
+    url = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2" # 2代表上市, 4代表上櫃
+    
+    # 2. 抓取網頁內容
+    response = requests.get(url)
+    
+    # 3. 用 Pandas 解析網頁中的表格
+    # 網頁編碼通常是 cp950 (繁體中文)
+    dfs = pd.read_html(response.text)
+    df = dfs[0] # 第一個表格就是名單
+    
+    # 4. 資料清理：設定標題並過濾掉不需要的行列
+    df.columns = df.iloc[0] # 把第一列變成標題
+    df = df.iloc[2:]       # 去掉前兩列說明
+    
+    # 5. 拆分「有價證券代號及名稱」 (例如 "2330 台積電" 拆成 "2330" 和 "台積電")
+    df['代號'] = df['有價證券代號及名稱'].apply(lambda x: x.split('\u3000')[0])
+    df['名稱'] = df['有價證券代號及名稱'].apply(lambda x: x.split('\u3000')[1] if '\u3000' in x else '')
+    
+    # 6. 只保留「股票」類別 (過濾掉權證、ETF等)
+    df = df[df['CFICode'] == 'ESVTFR'] # ESVTFR 是普通股的代碼
+    
+    return df[['代號', '名稱', '產業別']]
+
+# 執行並印出前 10 檔看看
+stock_list = get_taiwan_stock_list()
+print(f"目前上市股票總數: {len(stock_list)}")
+print(stock_list.head(10))
