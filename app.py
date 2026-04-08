@@ -3,32 +3,32 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import time
-import requests
 
 # ==========================================
-# 核心 1：自動抓取全台股「股票代碼」清單
+# 核心 1：內建 150 檔台股精選名單 (防雲端 IP 封鎖)
 # ==========================================
-@st.cache_data(ttl=86400) # 每天只抓一次清單，加快速度
-def get_all_taiwan_stocks():
-    try:
-        # 抓取上市股票名單
-        url = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2"
-        res = requests.get(url)
-        dfs = pd.read_html(res.text)
-        df = dfs[0]
-        df.columns = df.iloc[0]
-        df = df.iloc[2:]
-        # 清理資料，只拿出代號
-        df['代號'] = df['有價證券代號及名稱'].astype(str).apply(lambda x: x.split('\u3000')[0])
-        # 只保留普通股 (ESVTFR)
-        stock_list = df[df['CFICode'] == 'ESVTFR']['代號'].tolist()
-        return [s for s in stock_list if len(s) == 4] # 確保代號是4碼數字
-    except Exception as e:
-        # 如果證交所網站剛好在維護，提供台灣市值前段班作為備用名單
-        return ["2330", "2317", "2454", "2382", "2308", "2881", "2891", "2412", "2886", "2882"] 
+def get_safe_stock_list():
+    # 這裡包含了台灣前 150 大市值的優質公司，直接內建，不用去證交所抓！
+    return [
+        "2330", "2317", "2454", "2382", "2308", "2881", "2891", "2412", "2886", "2882",
+        "1216", "3231", "2002", "2603", "3045", "2884", "2356", "2892", "2345", "1301",
+        "3034", "1303", "2303", "2885", "3711", "2890", "5871", "2207", "2395", "5880",
+        "1101", "2379", "2880", "2912", "2887", "4938", "3008", "2615", "1590", "2301",
+        "1326", "2883", "6669", "3037", "2609", "1102", "1402", "3293", "2353", "2324",
+        "1229", "2313", "1605", "2105", "2357", "2362", "2376", "2383", "2385", "2392",
+        "2404", "2408", "2409", "2449", "2451", "2542", "2606", "2610", "2618", "2809",
+        "2812", "2834", "2845", "2888", "2889", "2903", "2915", "3019", "3044", "3443",
+        "3481", "3532", "3653", "3661", "3702", "4904", "4915", "4958", "5522", "6176",
+        "6239", "6269", "6415", "6770", "8046", "8299", "8454", "8464", "9904", "9910",
+        "9914", "9921", "9941", "1504", "1707", "1717", "1722", "1802", "1907", "2006",
+        "2015", "2027", "2049", "2106", "2201", "2204", "2206", "2314", "2337", "2344",
+        "2347", "2352", "2354", "2360", "2371", "2373", "2377", "2439", "2448", "2474",
+        "2489", "2492", "2504", "2511", "2548", "2601", "2607", "2614", "2633", "2707",
+        "2723", "2727", "2855", "2887", "3005", "3010", "3014", "3023", "3051", "3209"
+    ]
 
 # ==========================================
-# 核心 2：抓取單一股票財報並計算 (財報狗 6 步驟邏輯)
+# 核心 2：抓取單一股票財報並計算
 # ==========================================
 @st.cache_data(ttl=3600) 
 def fetch_and_calculate(stock_id):
@@ -69,57 +69,51 @@ def fetch_and_calculate(stock_id):
         return None
 
 # ==========================================
-# 網頁介面設計 (APP 前台)
+# 網頁介面設計
 # ==========================================
-st.set_page_config(page_title="全市場績優股雷達", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="績優股雷達 (精選150檔)", page_icon="🎯", layout="wide")
 
-st.title("🎯 全市場績優股雷達")
-st.write("自動連線證交所抓取名單，過濾出被低估的現金流好公司。")
+st.title("🎯 績優股雷達 (防護加強版)")
+st.write("內建台股前 150 大優質公司名單，穩定快速過濾出現金流好公司。")
 
-# 獲取全市場名單
-all_stocks = get_all_taiwan_stocks()
+all_stocks = get_safe_stock_list()
 total_stocks_count = len(all_stocks)
 
-st.info(f"📊 目前證交所上市普通股總計： **{total_stocks_count}** 檔")
+st.info(f"📊 內建精選觀察名單總計： **{total_stocks_count}** 檔 (免連線證交所，速度更快！)")
 
-# 互動拉桿：預設幫你設定在 100 檔
-scan_limit = st.slider("請選擇本次要掃描的股票數量：", min_value=10, max_value=total_stocks_count, value=100, step=10)
+scan_limit = st.slider("請選擇本次要掃描的股票數量：", min_value=10, max_value=total_stocks_count, value=50, step=10)
 
 if st.button("🚀 開始自動掃描"):
     
     target_stocks = all_stocks[:scan_limit]
-    st.warning(f"☕ 正在為您掃描前 {scan_limit} 檔股票，這大約需要 1 分鐘，請喝杯咖啡稍候...")
+    st.warning(f"☕ 正在為您掃描前 {scan_limit} 檔股票，請稍候...")
     
     results = []
-    
-    # 建立進度條與狀態文字
     progress_bar = st.progress(0)
     status_text = st.empty()
     
     for i, stock in enumerate(target_stocks):
-        status_text.text(f"🔍 正在掃描第 {i+1} / {scan_limit} 檔： {stock}")
+        status_text.text(f"🔍 正在抓取財報，第 {i+1} / {scan_limit} 檔： {stock}")
         
         data = fetch_and_calculate(stock)
         if data:
             results.append(data)
             
         progress_bar.progress((i + 1) / scan_limit)
-        time.sleep(0.3) # 停頓 0.3 秒防止被 Yahoo 封鎖 IP
+        time.sleep(0.5) # 稍微加長一點休息時間，避免被 Yahoo 踢掉
 
     status_text.empty()
 
     if results:
         df = pd.DataFrame(results)
         
-        # 執行 6 步驟篩選邏輯
         df = df[df['本益比(PE)'] > 0]
         df_step1 = df[df['今年FCF報酬率(%)'] >= df['去年FCF報酬率(%)']]
         df_step2 = df_step1[df_step1['3年平均FCF報酬率(%)'] > 0]
         
         if df_step2.empty:
-            st.error("掃描完成。但在您選擇的範圍內，今天沒有股票通過嚴格的現金流標準喔！")
+            st.error("掃描完成。但在這批名單中，今天沒有股票通過現金流標準喔！")
         else:
-            # 計算排名
             df_step2['PB排名'] = df_step2['股價淨值比(PB)'].rank(ascending=True)
             df_step2['PE排名'] = df_step2['本益比(PE)'].rank(ascending=True)
             df_step2['殖利率排名'] = df_step2['殖利率(%)'].rank(ascending=False)
@@ -127,11 +121,9 @@ if st.button("🚀 開始自動掃描"):
             
             final_list = df_step2.sort_values(by='綜合總分')
             
-            st.success(f"🎉 掃描完成！從 {scan_limit} 檔股票中，為您淬鍊出以下績優股：")
-            
-            # 顯示漂亮的表格
-            display_cols = ['代號', '股價', '綜合總分', '本益比(PE)', '股價淨值比(PB)', '殖利率(%)', '今年FCF報酬率(%)']
-            st.dataframe(final_list[display_cols].style.format("{:.2f}", subset=['股價', '綜合總分', '本益比(PE)', '股價淨值比(PB)', '殖利率(%)', '今年FCF報酬率(%)']), height=400)
+            st.success(f"🎉 掃描完成！從 {scan_limit} 檔股票中，淬鍊出以下績優股：")
+            display_cols = ['代號', '股價', '綜合總分', '本益比(PE)', '股價淨值比(PB)', '殖利率(%)']
+            st.dataframe(final_list[display_cols].style.format("{:.2f}", subset=['股價', '綜合總分', '本益比(PE)', '股價淨值比(PB)', '殖利率(%)']), height=400)
             
     else:
-        st.error("抓取資料失敗，可能是網路連線問題，請稍後再試。")
+        st.error("抓取資料失敗。Yahoo 財經可能暫時限制了雲端主機的連線，請過幾分鐘後再試。")
