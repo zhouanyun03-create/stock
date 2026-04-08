@@ -3,9 +3,32 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import time
+import requests
 
 # ==========================================
-# 核心模組：抓取資料 (加入 Streamlit 快取，讓APP變超快)
+# 核心 1：自動抓取全台股「股票代碼」清單
+# ==========================================
+@st.cache_data(ttl=86400) # 每天只抓一次清單，加快速度
+def get_all_taiwan_stocks():
+    try:
+        # 抓取上市股票名單
+        url = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2"
+        res = requests.get(url)
+        dfs = pd.read_html(res.text)
+        df = dfs[0]
+        df.columns = df.iloc[0]
+        df = df.iloc[2:]
+        # 清理資料，只拿出代號
+        df['代號'] = df['有價證券代號及名稱'].astype(str).apply(lambda x: x.split('\u3000')[0])
+        # 只保留普通股 (ESVTFR)
+        stock_list = df[df['CFICode'] == 'ESVTFR']['代號'].tolist()
+        return [s for s in stock_list if len(s) == 4] # 確保代號是4碼數字
+    except Exception as e:
+        # 如果證交所網站剛好在維護，提供台灣市值前段班作為備用名單
+        return ["2330", "2317", "2454", "2382", "2308", "2881", "2891", "2412", "2886", "2882"] 
+
+# ==========================================
+# 核心 2：抓取單一股票財報並計算 (財報狗 6 步驟邏輯)
 # ==========================================
 @st.cache_data(ttl=3600) 
 def fetch_and_calculate(stock_id):
@@ -48,57 +71,67 @@ def fetch_and_calculate(stock_id):
 # ==========================================
 # 網頁介面設計 (APP 前台)
 # ==========================================
-# 1. 設定網頁標題與圖示
-st.set_page_config(page_title="績優股雷達", page_icon="🎯", layout="centered")
+st.set_page_config(page_title="全市場績優股雷達", page_icon="🎯", layout="wide")
 
-# 2. 顯示大標題
-st.title("🎯 專屬績優股雷達")
-st.write("根據財報狗 6 步驟邏輯，自動過濾並為好公司打分數。")
+st.title("🎯 全市場績優股雷達")
+st.write("自動連線證交所抓取名單，過濾出被低估的現金流好公司。")
 
-# 測試名單 (為了讓您馬上看到效果，先用 5 檔知名大型股測試)
-test_stocks = ["2330", "2317", "2454", "2881", "2002"]
+# 獲取全市場名單
+all_stocks = get_all_taiwan_stocks()
+total_stocks_count = len(all_stocks)
 
-# 3. 建立一個按鈕，按下去才開始執行
-if st.button("🚀 開始掃描今日名單"):
+st.info(f"📊 目前證交所上市普通股總計： **{total_stocks_count}** 檔")
+
+# 互動拉桿：預設幫你設定在 100 檔
+scan_limit = st.slider("請選擇本次要掃描的股票數量：", min_value=10, max_value=total_stocks_count, value=100, step=10)
+
+if st.button("🚀 開始自動掃描"):
     
-    # 顯示轉圈圈的讀取動畫
-    with st.spinner('正在從市場抓取最新財報與股價，請稍候...'):
-        results = []
-        progress_bar = st.progress(0) # 顯示進度條
+    target_stocks = all_stocks[:scan_limit]
+    st.warning(f"☕ 正在為您掃描前 {scan_limit} 檔股票，這大約需要 1 分鐘，請喝杯咖啡稍候...")
+    
+    results = []
+    
+    # 建立進度條與狀態文字
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i, stock in enumerate(target_stocks):
+        status_text.text(f"🔍 正在掃描第 {i+1} / {scan_limit} 檔： {stock}")
         
-        for i, stock in enumerate(test_stocks):
-            data = fetch_and_calculate(stock)
-            if data:
-                results.append(data)
-            progress_bar.progress((i + 1) / len(test_stocks)) # 更新進度條
-            time.sleep(0.5)
+        data = fetch_and_calculate(stock)
+        if data:
+            results.append(data)
+            
+        progress_bar.progress((i + 1) / scan_limit)
+        time.sleep(0.3) # 停頓 0.3 秒防止被 Yahoo 封鎖 IP
 
-        if results:
-            df = pd.DataFrame(results)
-            
-            # 執行 6 步驟篩選邏輯
-            df = df[df['本益比(PE)'] > 0]
-            df_step1 = df[df['今年FCF報酬率(%)'] >= df['去年FCF報酬率(%)']]
-            df_step2 = df_step1[df_step1['3年平均FCF報酬率(%)'] > 0]
-            
-            if df_step2.empty:
-                st.warning("今天沒有股票通過嚴格的現金流標準喔！")
-            else:
-                # 計算排名
-                df_step2['PB排名'] = df_step2['股價淨值比(PB)'].rank(ascending=True)
-                df_step2['PE排名'] = df_step2['本益比(PE)'].rank(ascending=True)
-                df_step2['殖利率排名'] = df_step2['殖利率(%)'].rank(ascending=False)
-                df_step2['綜合總分'] = df_step2['PB排名'] + df_step2['PE排名'] + df_step2['殖利率排名']
-                
-                final_list = df_step2.sort_values(by='綜合總分')
-                
-                # 顯示成功訊息
-                st.success("掃描完成！以下是為您精選的績優股：")
-                
-                # 將資料顯示成漂亮的網頁互動表格
-                display_cols = ['代號', '股價', '綜合總分', '本益比(PE)', '股價淨值比(PB)', '殖利率(%)']
-                st.dataframe(final_list[display_cols].style.format("{:.2f}", subset=['股價', '綜合總分', '本益比(PE)', '股價淨值比(PB)', '殖利率(%)']))
-                
-                st.info("💡 總分越低，代表這家公司越便宜且現金流越健康。")
+    status_text.empty()
+
+    if results:
+        df = pd.DataFrame(results)
+        
+        # 執行 6 步驟篩選邏輯
+        df = df[df['本益比(PE)'] > 0]
+        df_step1 = df[df['今年FCF報酬率(%)'] >= df['去年FCF報酬率(%)']]
+        df_step2 = df_step1[df_step1['3年平均FCF報酬率(%)'] > 0]
+        
+        if df_step2.empty:
+            st.error("掃描完成。但在您選擇的範圍內，今天沒有股票通過嚴格的現金流標準喔！")
         else:
-            st.error("抓取資料失敗，請稍後再試。")
+            # 計算排名
+            df_step2['PB排名'] = df_step2['股價淨值比(PB)'].rank(ascending=True)
+            df_step2['PE排名'] = df_step2['本益比(PE)'].rank(ascending=True)
+            df_step2['殖利率排名'] = df_step2['殖利率(%)'].rank(ascending=False)
+            df_step2['綜合總分'] = df_step2['PB排名'] + df_step2['PE排名'] + df_step2['殖利率排名']
+            
+            final_list = df_step2.sort_values(by='綜合總分')
+            
+            st.success(f"🎉 掃描完成！從 {scan_limit} 檔股票中，為您淬鍊出以下績優股：")
+            
+            # 顯示漂亮的表格
+            display_cols = ['代號', '股價', '綜合總分', '本益比(PE)', '股價淨值比(PB)', '殖利率(%)', '今年FCF報酬率(%)']
+            st.dataframe(final_list[display_cols].style.format("{:.2f}", subset=['股價', '綜合總分', '本益比(PE)', '股價淨值比(PB)', '殖利率(%)', '今年FCF報酬率(%)']), height=400)
+            
+    else:
+        st.error("抓取資料失敗，可能是網路連線問題，請稍後再試。")
